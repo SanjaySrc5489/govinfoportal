@@ -9,11 +9,7 @@ import { NoResults } from "@/components/NoResults";
 import { ErrorDisplay } from "@/components/ErrorDisplay";
 import { Features } from "@/components/Features";
 import { Footer } from "@/components/Footer";
-
-// API Endpoints
-const USER_API = 'http://3.107.169.231';
-const VEHICLE_DETAILS_API = 'http://45.79.121.32:5050/vahan';
-const VEHICLE_MOBILE_API = 'http://45.79.121.32:5000/vahan';
+import { supabase } from "@/integrations/supabase/client";
 
 type SearchState = 'idle' | 'loading' | 'success' | 'error' | 'no-results';
 
@@ -35,50 +31,38 @@ export default function Index() {
 
     try {
       if (type === 'vehicle') {
-        // Vehicle search
-        const detailsRes = await fetch(`${VEHICLE_DETAILS_API}?reg=${encodeURIComponent(value)}`);
-        const vehicleData = await detailsRes.json();
+        // Vehicle search via edge function
+        const { data, error: fnError } = await supabase.functions.invoke('vehicle-lookup', {
+          body: { registration: value }
+        });
 
-        if (vehicleData && vehicleData.data) {
-          const resultData: Record<string, unknown> = { vehicle_details: vehicleData.data };
+        if (fnError) throw fnError;
 
-          // Try to get mobile number using chassis
-          const chassis = vehicleData.data.chassis_no || '';
-          if (chassis.length >= 5) {
-            const last5 = chassis.slice(-5);
-            try {
-              const mobileRes = await fetch(`${VEHICLE_MOBILE_API}?reg=${encodeURIComponent(value)}&chassis=${encodeURIComponent(last5)}`);
-              const mobileData = await mobileRes.json();
-              if (mobileData) {
-                resultData.mobile_info = mobileData;
-              }
-            } catch {
-              // Mobile lookup failed, continue without it
-            }
-          }
-
-          setResult({ type: 'vehicle', data: resultData });
+        if (data && data.vehicle_details) {
+          setResult({ type: 'vehicle', data });
           setSearchState('success');
+        } else if (data?.error) {
+          setSearchState('no-results');
         } else {
           setSearchState('no-results');
         }
       } else {
-        // User search (mobile or aadhaar)
-        const endpoint = type === 'mobile'
-          ? `/user/mobile/${encodeURIComponent(value)}`
-          : `/user/id/${encodeURIComponent(value)}`;
+        // User search (mobile or aadhaar) via edge function
+        const { data, error: fnError } = await supabase.functions.invoke('user-lookup', {
+          body: { searchType: type, searchValue: value }
+        });
 
-        const res = await fetch(`${USER_API}${endpoint}`);
-        const userData = await res.json();
+        if (fnError) throw fnError;
 
-        if (userData && Object.keys(userData).length > 0) {
-          setResult({ type: 'user', data: userData });
+        if (data && !data.error && Object.keys(data).length > 0) {
+          setResult({ type: 'user', data });
           setSearchState('success');
         } else {
           setSearchState('no-results');
         }
       }
     } catch (err) {
+      console.error('Search error:', err);
       setError(err instanceof Error ? err.message : 'An error occurred while searching');
       setSearchState('error');
     }
